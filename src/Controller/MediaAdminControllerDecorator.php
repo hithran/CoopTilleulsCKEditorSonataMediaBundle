@@ -13,8 +13,14 @@ declare(strict_types=1);
 
 namespace CoopTilleuls\Bundle\CKEditorSonataMediaBundle\Controller;
 
-use Sonata\MediaBundle\Controller\MediaAdminController as BaseMediaAdminController;
+use Sonata\AdminBundle\Admin\AdminInterface;
+use Sonata\AdminBundle\Request\AdminFetcherInterface;
+use Sonata\AdminBundle\Templating\TemplateRegistryInterface;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Component\DependencyInjection\Attribute\AsDecorator;
+use Symfony\Component\DependencyInjection\Attribute\AutowireDecorated;
 use Symfony\Component\Form\FormView;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Security\Core\Exception\AccessDeniedException;
 
@@ -23,18 +29,33 @@ use Symfony\Component\Security\Core\Exception\AccessDeniedException;
  *
  * @author Kévin Dunglas <kevin@les-tilleuls.coop>
  */
-class MediaAdminController extends BaseMediaAdminController
+#[AsDecorator(decorates: 'sonata.media.controller.media.admin')]
+class MediaAdminControllerDecorator extends AbstractController
 {
-    /**
-     * Gets a template.
-     *
-     * @param string $name
-     *
-     * @return string
-     */
-    private function getTemplate($name)
+
+    private ?AdminInterface $admin = null;
+    private ?TemplateRegistryInterface $templateRegistry;
+
+    public function __construct(
+        #[AutowireDecorated]
+        private readonly \Sonata\MediaBundle\Controller\MediaAdminController $inner,
+        private readonly AdminFetcherInterface $adminFetcher
+
+    )
     {
-        $templates = $this->container->getParameter('coop_tilleuls_ck_editor_sonata_media.configuration.templates');
+    }
+
+    public function configureAdmin(Request $request): void {
+        $this->inner->configureAdmin($request);
+
+        $admin = $this->adminFetcher->get($request);
+        $this->admin = $admin;
+        $this->templateRegistry = $this->admin->getTemplateRegistry();
+    }
+
+    private function getTemplate(string $name): ?string
+    {
+        $templates = $this->getParameter('coop_tilleuls_ck_editor_sonata_media.configuration.templates');
 
         if (isset($templates[$name])) {
             return $templates[$name];
@@ -43,6 +64,8 @@ class MediaAdminController extends BaseMediaAdminController
         return null;
     }
 
+
+
     /**
      * Returns the response object associated with the browser action.
      *
@@ -50,7 +73,7 @@ class MediaAdminController extends BaseMediaAdminController
      *
      * @throws AccessDeniedException
      */
-    public function browserAction()
+    public function browserAction(): Response
     {
         if (false === $this->admin->isGranted('LIST')) {
             throw new AccessDeniedException();
@@ -63,7 +86,7 @@ class MediaAdminController extends BaseMediaAdminController
         // Store formats
         $formats = [];
         foreach ($datagrid->getResults() as $media) {
-            $formats[$media->getId()] = $this->get('sonata.media.pool')->getFormatNamesByContext($media->getContext());
+            $formats[$media->getId()] = $this->container->get('sonata.media.pool')->getFormatNamesByContext($media->getContext());
         }
 
         $formView = $datagrid->getForm()->createView();
@@ -87,15 +110,14 @@ class MediaAdminController extends BaseMediaAdminController
      *
      * @throws AccessDeniedException
      */
-    public function uploadAction()
+    public function uploadAction(Request $request): Response
     {
         if (false === $this->admin->isGranted('CREATE')) {
             throw new AccessDeniedException();
         }
 
-        $mediaManager = $this->get('sonata.media.manager.media');
+        $mediaManager = $this->container->get('sonata.media.manager.media');
 
-        $request = $this->getRequest();
         $provider = $request->get('provider');
         $file = $request->files->get('upload');
 
@@ -103,7 +125,7 @@ class MediaAdminController extends BaseMediaAdminController
             throw $this->createNotFoundException();
         }
 
-        $context = $request->get('context', $this->get('sonata.media.pool')->getDefaultContext());
+        $context = $request->get('context', $this->container->get('sonata.media.pool')->getDefaultContext());
 
         $media = $mediaManager->create();
         $media->setBinaryContent($file);
@@ -120,11 +142,11 @@ class MediaAdminController extends BaseMediaAdminController
     /**
      * Sets the admin form theme to form view. Used for compatibility between Symfony versions.
      *
-     * @param string $theme
+     * @param string[] $theme
      */
-    private function setFormTheme(FormView $formView, $theme)
+    private function setFormTheme(FormView $formView, array $theme): void
     {
-        $twig = $this->get('twig');
+        $twig = $this->container->get('twig');
 
         // BC for Symfony < 3.2 where this runtime does not exists
         if (!method_exists('Symfony\Bridge\Twig\AppVariable', 'getToken')) {
